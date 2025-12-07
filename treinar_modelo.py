@@ -6,6 +6,7 @@ import joblib
 from transformers import AutoTokenizer, AutoModel
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import train_test_split
 
 # --- CONFIGURAÇÕES ---
 NOME_MODELO = "pucpr/biobertpt-clin"
@@ -15,73 +16,57 @@ print(">>> Inicializando BioBERT...")
 tokenizer = AutoTokenizer.from_pretrained(NOME_MODELO)
 model = AutoModel.from_pretrained(NOME_MODELO)
 
-# --- GABARITO (SIMULAÇÃO) ---
-# Como nossos dados no banco ainda não têm a classificação "oficial", 
-# criamos esse dicionário simulando que um humano classificou os 12 casos.
-# ID do Prontuário : Grau da RAM (0 a 4)
-gabarito_reais = {
-    1: 3, # Vômito G3
-    2: 4, # Nefrotoxicidade G4
-    3: 2, # Neuropatia G2
-    4: 1, # Rash G1
-    5: 3, # Neutropenia G3
-    6: 2, # Rash G2
-    7: 2, # Cardiotoxicidade G2
-    8: 2, # Mucosite G2
-    9: 3, # Colite G3
-    10: 0, # Sem RAM
-    11: 2, # Reação Infusional G2
-    12: 1  # Fogachos G1
-}
-
 def gerar_embedding(texto):
-    """Transforma texto em vetor numérico"""
-    inputs = tokenizer(texto, return_tensors="pt", truncation=True, padding=True, max_length=512)
+    # Diminuí max_length para 128 para ser mais rápido no treino massivo
+    inputs = tokenizer(texto, return_tensors="pt", truncation=True, padding=True, max_length=128)
     with torch.no_grad():
         outputs = model(**inputs)
     return outputs.last_hidden_state[:, 0, :].numpy()[0]
 
 def treinar():
-    # 1. Busca dados no SQL
-    print(">>> Buscando dados no SQL...")
+    # 1. Busca dados na tabela NOVA (dados_treino)
+    print(">>> Lendo dados gerados sinteticamente...")
     conn = sqlite3.connect('oncologia_farmacovigilancia.db')
-    df = pd.read_sql("SELECT id, texto_clinico FROM prontuarios", conn)
+    
+    # ATENÇÃO: Aqui pegamos da tabela 'dados_treino', não 'prontuarios'
+    df = pd.read_sql("SELECT texto, grau_real FROM dados_treino", conn)
     conn.close()
 
-    print(f">>> Processando {len(df)} prontuários (Transformando texto em números)...")
+    if len(df) == 0:
+        print("ERRO: Tabela vazia. Rode 'python gerar_sinteticos.py' primeiro.")
+        return
+
+    print(f">>> Processando {len(df)} exemplos para ensinar a IA... (Isso vai levar uns 20-30 seg)")
     
-    X = [] # Dados (Vetores)
-    y = [] # Respostas (Gabarito)
+    X = []
+    y = []
 
-    for index, row in df.iterrows():
-        # Gera o vetor do texto
-        vetor = gerar_embedding(row['texto_clinico'])
-        X.append(vetor)
-        
-        # Pega a resposta correta no gabarito
-        gravidade = gabarito_reais.get(row['id'], 0)
-        y.append(gravidade)
-
-    # Converte para formato numérico do Numpy
+    # Gera os vetores para os 200 casos
+    for i, texto in enumerate(df['texto']):
+        if i % 50 == 0: print(f"   ... processado {i} de {len(df)}")
+        X.append(gerar_embedding(texto))
+    
     X = np.array(X)
-    y = np.array(y)
+    y = df['grau_real'].values
 
-    # 2. Treina o Modelo
-    print(">>> Treinando o Random Forest...")
+    # 2. Separa 20% para prova final
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # 3. Treina o Random Forest
+    print(">>> Treinando modelo...")
     clf = RandomForestClassifier(n_estimators=100, random_state=42)
-    clf.fit(X, y)
+    clf.fit(X_train, y_train)
 
-    # 3. Avalia
-    print("\n--- RESULTADOS PRELIMINARES ---")
-    preds = clf.predict(X)
-    acc = accuracy_score(y, preds)
-    print(f"Acurácia no treino: {acc * 100:.1f}%")
-    print("(Nota: Acurácia alta é esperada pois estamos testando com os mesmos dados de treino)")
-
-    # 4. Salva o modelo treinado
+    # 4. Avalia
+    preds = clf.predict(X_test)
+    acc = accuracy_score(y_test, preds)
+    
+    print(f"\n--- RESULTADO APÓS DATA AUGMENTATION ---")
+    print(f"Acurácia em dados novos: {acc * 100:.1f}%")
+    
+    # 5. Salva
     joblib.dump(clf, CAMINHO_SALVAR)
-    print(f"\n>>> SUCESSO! Modelo salvo em: {CAMINHO_SALVAR}")
-    print("Agora seu projeto tem um 'cérebro' capaz de classificar novos casos.")
+    print(f">>> Modelo RE-TREINADO salvo em: {CAMINHO_SALVAR}")
 
 if __name__ == "__main__":
     treinar()
