@@ -1,0 +1,9 @@
+import sqlite3
+import pandas as pd
+
+# Conecta e lê os dados usando Pandas (Visualização tabular bonita)
+conn = sqlite3.connect('oncologia_farmacovigilancia.db')
+df = pd.read_sql_query("SELECT id, paciente_hash, substr(texto_clinico, 1, 50) as resumo_texto FROM prontuarios", conn)
+conn.close()
+
+print(df)
