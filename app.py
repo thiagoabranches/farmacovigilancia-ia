@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import torch
+import sqlite3
 from transformers import AutoTokenizer, AutoModel
 from lifelines import KaplanMeierFitter
 import matplotlib.pyplot as plt
@@ -107,29 +108,123 @@ with col1:
 
 with col2:
     st.subheader("📊 Indicadores do Setor")
-    st.write("Dados simulados de toxicidade do serviço")
     
-    # --- O GRÁFICO KAPLAN-MEIER ---
-    # Simulando dados: "Tempo até a primeira RAM Grave"
-    # T = Tempo em meses, E = Evento (1=Teve RAM Grave, 0=Censurado/Sem RAM)
+    # CRIANDO AS ABAS (Botoes de Navegação)
+    tab_graficos, tab_tabelas = st.tabs(["📈 Gráficos Visuais", "📋 Dados Tabulares"])
+    
+    # --- SIMULAÇÃO DE DADOS PARA O DASHBOARD ---
+    # Criamos um DataFrame fictício para alimentar os gráficos e a tabela
     np.random.seed(42)
-    T = np.random.exponential(8, size=100) # Média de 8 meses
-    E = np.random.binomial(1, 0.6, size=100) # 60% tiveram evento
-    
-    kmf = KaplanMeierFitter()
-    kmf.fit(T, event_observed=E, label='Sobrevida Livre de RAM Grave')
-    
-    fig, ax = plt.subplots()
-    kmf.plot_survival_function(ax=ax, ci_show=True, color="#d9534f")
-    ax.set_title("Tempo até Toxicidade Limitante (Kaplan-Meier)")
-    ax.set_xlabel("Meses de Tratamento")
-    ax.set_ylabel("Probabilidade Livre de Evento")
-    ax.grid(True, alpha=0.3)
-    
-    st.pyplot(fig)
-    
-    st.metric(label="Mediana Livre de Toxicidade", value=f"{kmf.median_survival_time_:.1f} Meses")
+    dados_dashboard = pd.DataFrame({
+        'ID Paciente': [f'#{x}' for x in range(1040, 1090)],
+        'Protocolo': np.random.choice(['AC-T', 'FOLFOX', 'FOLFIRI', 'Carbo/Taxol'], 50),
+        'RAM Detectada': np.random.choice(['Neutropenia', 'Diarreia', 'Neuropatia', 'Rash', 'Náusea'], 50),
+        'Grau CTCAE': np.random.choice([1, 2, 3, 4], 50, p=[0.4, 0.3, 0.2, 0.1]),
+        'Status': np.random.choice(['Resolvido', 'Em Monitoramento', 'Intervenção Farmacêutica'], 50)
+    })
+
+    # --- ABA 1: VISÃO GRÁFICA (CONECTADA AO SQL) ---
+    with tab_graficos:
+        st.markdown("### 🧬 Sobrevida Livre de Toxicidade (Dados Reais do SQL)")
+        
+        # 1. Conexão com o Banco de Dados Real
+        conn = sqlite3.connect('oncologia_farmacovigilancia.db')
+        
+        # Puxamos apenas o 'grau_real' da tabela de treino/histórico
+        df_sql = pd.read_sql("SELECT grau_real FROM dados_treino", conn)
+        conn.close()
+        
+        if not df_sql.empty:
+            # 2. Engenharia de Dados para o Kaplan-Meier
+            # Definição de Evento: Grau 3 ou 4 (Toxicidade Limitante)
+            # Se grau >= 3, evento = 1. Se grau < 3, evento = 0 (Censurado)
+            df_sql['evento'] = df_sql['grau_real'].apply(lambda x: 1 if x >= 3 else 0)
+            
+            # Simulação do Tempo (Eixo X)
+            # Como nosso gerador sintético não criou datas, atribuímos tempos aleatórios (1 a 36 meses)
+            # Num cenário real hospitalar, faríamos: Data_Evento - Data_Inicio_Tratamento
+            np.random.seed(42) 
+            df_sql['tempo_meses'] = np.random.randint(1, 36, size=len(df_sql))
+            
+            # 3. Plotagem
+            kmf = KaplanMeierFitter()
+            kmf.fit(df_sql['tempo_meses'], event_observed=df_sql['evento'], label='Protocolos da Instituição')
+            
+            fig, ax = plt.subplots(figsize=(8, 5))
+            kmf.plot_survival_function(ax=ax, ci_show=True, color="#d9534f", linewidth=2)
+            
+            # Formatação Clínica
+            ax.set_title(f"Análise de Sobrevida (N = {len(df_sql)} Pacientes)", fontsize=12)
+            ax.set_xlabel("Meses de Tratamento", fontsize=10)
+            ax.set_ylabel("Probabilidade de Permanecer sem Toxicidade Grave", fontsize=10)
+            ax.grid(True, linestyle='--', alpha=0.5)
+            ax.set_ylim(0, 1.05) # Eixo Y de 0 a 100%
+            
+            # Adiciona linha de corte de 50% (Mediana)
+            if kmf.median_survival_time_ < float('inf'):
+                ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
+                ax.text(0, 0.51, f' Mediana: {kmf.median_survival_time_:.1f} meses', color='gray', fontsize=9)
+
+            st.pyplot(fig)
+            
+            # Métricas abaixo do gráfico
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total de Pacientes Analisados", len(df_sql))
+            c2.metric("Eventos Graves (G3/G4)", df_sql['evento'].sum())
+            c3.metric("Taxa de Toxicidade Global", f"{(df_sql['evento'].mean()*100):.1f}%")
+            
+        else:
+            st.warning("⚠️ O banco de dados está vazio. Gere dados sintéticos primeiro.")
+
+        st.write("---")
+        st.write("**Distribuição dos Graus CTCAE no Banco**")
+        # Gráfico de barras simples usando os dados do SQL
+        st.bar_chart(df_sql['grau_real'].value_counts().sort_index(), color="#2E86C1")
+
+    # --- ABA 2: VISÃO DE TABELA ---
+    with tab_tabelas:
+        st.write("**Histórico Recente de Alertas**")
+        
+        # Filtro interativo (Bônus)
+        filtro_grau = st.multiselect(
+            "Filtrar por Gravidade:", 
+            options=[1, 2, 3, 4],
+            default=[3, 4] # Já vem marcado os graves por padrão
+        )
+        
+        # Aplica o filtro na tabela
+        if filtro_grau:
+            df_filtrado = dados_dashboard[dados_dashboard['Grau CTCAE'].isin(filtro_grau)]
+        else:
+            df_filtrado = dados_dashboard
+            
+        # Mostra a tabela interativa (dá para ordenar clicando na coluna)
+        st.dataframe(
+            df_filtrado, 
+            hide_index=True,
+            column_config={
+                "Grau CTCAE": st.column_config.NumberColumn(
+                    "Grau",
+                    help="Classificação CTCAE v6.0",
+                    format="%d ⭐" # Formatação visual bonitinha
+                ),
+                "Status": st.column_config.SelectboxColumn(
+                    "Status Clínico",
+                    options=["Resolvido", "Em Monitoramento", "Intervenção Farmacêutica"],
+                    required=True
+                )
+            }
+        )
+        
+        # Botão de Download (Muito útil para gestão)
+        csv = df_filtrado.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Baixar Relatório em Excel (CSV)",
+            data=csv,
+            file_name='relatorio_rams_oncologia.csv',
+            mime='text/csv',
+        )
 
 # --- RODAPÉ ---
 st.markdown("---")
-st.caption("Desenvolvido por Thiago Abranches | BioBERT + Random Forest | v2.0")
+st.caption("Desenvolvido por Thiago Abranches | BioBERT + Random Forest | v3.1")
