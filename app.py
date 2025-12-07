@@ -38,6 +38,49 @@ def classificar_texto(texto):
 st.title("🛡️ Sistema de Farmacovigilância Ativa em Oncologia")
 st.markdown("---")
 
+# --- KPI DASHBOARD (PAINEL DE GESTÃO) ---
+# Aqui simulamos métricas estratégicas para a Farmácia Clínica
+st.markdown("### 📈 Indicadores de Desempenho (KPIs)")
+
+# Layout de 4 colunas para os números ficarem lado a lado
+kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+
+with kpi1:
+    st.metric(
+        label="RAMs Graves Detectadas", 
+        value="127", 
+        delta="+14% este mês",
+        help="Total de eventos Grau 3 ou 4 identificados pela IA nos últimos 30 dias."
+    )
+
+with kpi2:
+    st.metric(
+        label="Tempo Médio de Intervenção", 
+        value="45 min", 
+        delta="-30% (Meta Atingida)",
+        delta_color="normal",
+        help="Tempo entre a prescrição e o alerta farmacêutico."
+    )
+
+with kpi3:
+    st.metric(
+        label="Acurácia do Modelo", 
+        value="92%", 
+        delta="Estável",
+        help="Confiabilidade da IA em distinguir casos Graves de Leves."
+    )
+
+with kpi4:
+    st.metric(
+        label="Custo Evitado (Estimado)", 
+        value="R$ 42.000", 
+        delta="Internações Prevenidas",
+        delta_color="inverse", # Fica verde se o número for positivo
+        help="Cálculo baseado no custo médio de internação por toxicidade x RAMs graves interceptadas."
+    )
+
+st.markdown("---") # Uma linha divisória para separar os KPIs da ferramenta de texto
+
 col1, col2 = st.columns([2, 1])
 
 with col1:
